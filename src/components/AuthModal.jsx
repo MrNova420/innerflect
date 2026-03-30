@@ -95,10 +95,13 @@ export default function AuthModal({ mode: initialMode = 'login', onClose }) {
     try {
       if (mode === 'login') {
         await login(email.trim(), password)
+        onClose()
       } else {
-        await register(email.trim(), password, name.trim() || 'User')
+        const u = await register(email.trim(), password, name.trim() || 'User')
+        // Show "check your email" state instead of immediately closing
+        setSuccess(`Account created! We sent a verification email to ${u?.email || email.trim()}. Check your inbox to unlock all features.`)
+        // Don't close — let user read the message and close manually
       }
-      onClose()
     } catch (err) {
       setError(err.message || 'Something went wrong. Please try again.')
     } finally {

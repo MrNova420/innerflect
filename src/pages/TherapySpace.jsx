@@ -386,6 +386,61 @@ function ModelPicker({ selectedId, onSelect, disabled }) {
   )
 }
 
+function VerifyEmailBanner({ user }) {
+  const [sending, setSending] = useState(false)
+  const [sent, setSent]       = useState(false)
+  const [dismissed, setDismissed] = useState(
+    () => sessionStorage.getItem('innerflect_verify_dismissed') === '1'
+  )
+  if (dismissed) return null
+
+  async function resend() {
+    setSending(true)
+    try {
+      const token = localStorage.getItem('innerflect_auth') || ''
+      const api = window.INNERFLECT_API_BASE || ''
+      const r = await fetch(`${api}/api/auth/resend-verification`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      const data = await r.json()
+      if (data.ok) setSent(true)
+    } catch { /* silent */ } finally { setSending(false) }
+  }
+
+  return (
+    <div style={{
+      padding: '0.65rem 1rem', borderRadius: '10px',
+      background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)',
+      fontSize: '0.82rem', color: '#fcd34d', display: 'flex', alignItems: 'center',
+      gap: '0.5rem', flexWrap: 'wrap',
+    }}>
+      <span>📧</span>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        {sent
+          ? 'Verification email sent! Check your inbox.'
+          : `Verify your email (${user.email}) to unlock chat history and pro features.`}
+      </span>
+      {!sent && (
+        <button
+          onClick={resend}
+          disabled={sending}
+          style={{ background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.3)',
+            color: '#fcd34d', borderRadius: '6px', padding: '0.2rem 0.6rem',
+            fontSize: '0.78rem', cursor: 'pointer', fontWeight: 600 }}
+        >
+          {sending ? '…' : 'Resend'}
+        </button>
+      )}
+      <button
+        onClick={() => { sessionStorage.setItem('innerflect_verify_dismissed', '1'); setDismissed(true) }}
+        style={{ background: 'none', border: 'none', color: '#fcd34d', opacity: 0.5,
+          cursor: 'pointer', fontSize: '1rem', padding: 0 }}
+      >×</button>
+    </div>
+  )
+}
+
 function ActiveModelBadge({ modelId, fromCache, serverMode }) {
   if (serverMode) {
     return (
@@ -1399,6 +1454,12 @@ export default function TherapySpace() {
         @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
       `}</style>
       <div style={{ flex: 1, maxWidth: '800px', width: '100%', margin: '0 auto', padding: 'clamp(0.5rem, 3vw, 1.5rem)', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+
+        {/* Email verification nudge — shown once for unverified accounts */}
+        {user && user.email_verified === false && (
+          <VerifyEmailBanner user={user} />
+        )}
+
         {/* Top bar: privacy notice + model info */}
         <motion.div
           initial={{ opacity: 0, y: -10 }}

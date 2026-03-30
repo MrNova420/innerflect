@@ -448,7 +448,7 @@ async def _get_current_user(request: Request):
         return None
     async with _pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT id, email, name, avatar_url, plan, preferences FROM users WHERE id=$1", user_id
+            "SELECT id, email, name, avatar_url, plan, preferences, email_verified FROM users WHERE id=$1", user_id
         )
     if not row:
         return None
@@ -563,8 +563,8 @@ async def auth_register(body: RegisterIn, request: Request):
     try:
         async with _pool.acquire() as conn:
             row = await conn.fetchrow(
-                "INSERT INTO users (email, password_hash, name) VALUES ($1,$2,$3) "
-                "RETURNING id, email, name, avatar_url, plan",
+                "INSERT INTO users (email, password_hash, name, email_verified) VALUES ($1,$2,$3,FALSE) "
+                "RETURNING id, email, name, avatar_url, plan, email_verified",
                 body.email.lower().strip(), pw_hash, body.name
             )
     except Exception as e:
@@ -573,6 +573,18 @@ async def auth_register(body: RegisterIn, request: Request):
         raise HTTPException(500, "Registration failed")
     async with _pool.acquire() as conn:
         tokens = await _issue_tokens(conn, row["id"])
+    # Send verification email (non-blocking — never fails the registration)
+    verify_token = secrets.token_hex(24)
+    expires_at = int(time.time()) + 86400 * 3  # 3 days
+    try:
+        async with _pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO email_verifications (token, user_id, expires_at) VALUES ($1,$2,$3)",
+                verify_token, row["id"], expires_at,
+            )
+        await _send_verification_email(row["email"], verify_token)
+    except Exception:
+        pass  # Never block registration if email sending fails
     return {**tokens, "user": dict(row)}
 
 @app.post("/api/auth/login")
@@ -613,10 +625,11 @@ async def auth_google(body: GoogleAuthIn, request: Request):
         raise HTTPException(401, "Could not get Google user ID")
     async with _pool.acquire() as conn:
         row = await conn.fetchrow("""
-            INSERT INTO users (google_id, email, name, avatar_url)
-            VALUES ($1,$2,$3,$4)
-            ON CONFLICT (google_id) DO UPDATE SET name=EXCLUDED.name, avatar_url=EXCLUDED.avatar_url
-            RETURNING id, email, name, avatar_url, plan
+            INSERT INTO users (google_id, email, name, avatar_url, email_verified)
+            VALUES ($1,$2,$3,$4,TRUE)
+            ON CONFLICT (google_id) DO UPDATE SET name=EXCLUDED.name, avatar_url=EXCLUDED.avatar_url,
+                email_verified=TRUE
+            RETURNING id, email, name, avatar_url, plan, email_verified
         """, google_id, email, name, avatar)
         tokens = await _issue_tokens(conn, row["id"])
     return {**tokens, "user": dict(row)}
@@ -689,6 +702,38 @@ async def _send_password_reset_email(email: str, token: str):
     else:
         print(f"[innerflect] Password reset token for user: {reset_url}")
 
+async def _send_verification_email(email: str, token: str):
+    """Send email address verification link. Non-blocking — always returns gracefully."""
+    verify_url = f"{_env('SITE_URL', 'https://innerflect.netlify.app')}/?verify={token}"
+    resend_key = _env("RESEND_API_KEY", "")
+    if resend_key:
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {resend_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "from": "Innerflect <noreply@innerflect.app>",
+                    "to": [email],
+                    "subject": "Verify your Innerflect email",
+                    "html": (
+                        "<div style='font-family:system-ui,sans-serif;max-width:480px;margin:0 auto;padding:2rem;'>"
+                        "<h2 style='color:#7c3aed;margin-bottom:0.5rem;'>Welcome to Innerflect 💜</h2>"
+                        "<p style='color:#475569;line-height:1.6;'>You're almost in. Click the button below to verify your email and unlock all features.</p>"
+                        f"<a href='{verify_url}' style='display:inline-block;margin:1.5rem 0;padding:0.85rem 2rem;"
+                        "background:linear-gradient(135deg,#7c3aed,#06b6d4);color:#fff;border-radius:10px;"
+                        "text-decoration:none;font-weight:700;font-size:1rem;'>Verify my email →</a>"
+                        "<p style='color:#94a3b8;font-size:0.8rem;'>This link expires in 3 days. "
+                        "If you didn't create an Innerflect account, you can safely ignore this email.</p>"
+                        "</div>"
+                    ),
+                },
+            )
+    else:
+        logging.info(f"[innerflect] Email verify URL (no RESEND_API_KEY set): {verify_url}")
+
 @app.post("/api/auth/forgot-password")
 @limiter.limit("5/minute")
 async def auth_forgot_password(body: ForgotPasswordIn, request: Request):
@@ -737,6 +782,52 @@ async def auth_reset_password(body: ResetPasswordIn, request: Request):
             "DELETE FROM password_resets WHERE user_id=$1", user_id
         )
     return {"message": "Password updated successfully"}
+
+# ── Email Verification ────────────────────────────────────────────────────────
+
+@app.get("/api/auth/verify-email")
+@limiter.limit("10/minute")
+async def verify_email(token: str = "", request: Request = None):
+    """Verify email address from the link in the verification email."""
+    if not token:
+        raise HTTPException(400, "Verification token required")
+    now_ts = int(time.time())
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT user_id, expires_at FROM email_verifications WHERE token=$1", token
+        )
+        if not row:
+            raise HTTPException(400, "Invalid or expired verification link")
+        if row["expires_at"] < now_ts:
+            await conn.execute("DELETE FROM email_verifications WHERE token=$1", token)
+            raise HTTPException(400, "Verification link expired — please request a new one")
+        await conn.execute("UPDATE users SET email_verified=TRUE WHERE id=$1", row["user_id"])
+        await conn.execute("DELETE FROM email_verifications WHERE token=$1", token)
+    return {"ok": True, "message": "Email verified! You now have full access."}
+
+@app.post("/api/auth/resend-verification")
+@limiter.limit("3/minute")
+async def resend_verification(request: Request):
+    """Resend email verification link for the current user."""
+    user = await _get_current_user(request)
+    if not user:
+        raise HTTPException(401, "Not authenticated")
+    if user.get("email_verified"):
+        return {"ok": True, "message": "Email is already verified"}
+    verify_token = secrets.token_hex(24)
+    expires_at = int(time.time()) + 86400 * 3  # 3 days
+    async with _pool.acquire() as conn:
+        # Remove any stale tokens for this user, then insert fresh one
+        await conn.execute("DELETE FROM email_verifications WHERE user_id=$1", user["id"])
+        await conn.execute(
+            "INSERT INTO email_verifications (token, user_id, expires_at) VALUES ($1,$2,$3)",
+            verify_token, user["id"], expires_at,
+        )
+    try:
+        await _send_verification_email(user["email"], verify_token)
+    except Exception as e:
+        raise HTTPException(500, f"Could not send email — try again shortly")
+    return {"ok": True, "message": "Verification email sent! Check your inbox."}
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  10. SUBSCRIPTION

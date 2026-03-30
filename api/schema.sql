@@ -53,18 +53,24 @@ CREATE INDEX IF NOT EXISTS idx_slayer_day ON slayer_events("timestamp", event);
 
 -- ── Users ─────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS users (
-    id            BIGSERIAL PRIMARY KEY,
-    email         TEXT UNIQUE,
-    password_hash TEXT,
-    google_id     TEXT UNIQUE,
-    name          TEXT NOT NULL DEFAULT 'User',
-    avatar_url    TEXT DEFAULT '',
-    plan          TEXT NOT NULL DEFAULT 'free' CHECK(plan IN ('free','pro')),
-    preferences   JSONB DEFAULT '{}',
-    created_at    BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT
+    id              BIGSERIAL PRIMARY KEY,
+    email           TEXT UNIQUE,
+    password_hash   TEXT,
+    google_id       TEXT UNIQUE,
+    name            TEXT NOT NULL DEFAULT 'User',
+    avatar_url      TEXT DEFAULT '',
+    plan            TEXT NOT NULL DEFAULT 'free' CHECK(plan IN ('free','pro')),
+    preferences     JSONB DEFAULT '{}',
+    email_verified  BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at      BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT
 );
 CREATE INDEX IF NOT EXISTS idx_users_email  ON users(email);
 CREATE INDEX IF NOT EXISTS idx_users_google ON users(google_id);
+
+-- Idempotent migration: add email_verified to existing deployments
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT FALSE;
+-- Google-linked accounts are already email-verified (Google validates emails)
+UPDATE users SET email_verified = TRUE WHERE google_id IS NOT NULL AND email_verified = FALSE;
 
 -- ── Legacy Session Tokens (replaced by refresh_tokens) ────────────────────────
 CREATE TABLE IF NOT EXISTS user_sessions (
@@ -93,6 +99,16 @@ CREATE TABLE IF NOT EXISTS password_resets (
     expires_at BIGINT NOT NULL,
     created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT
 );
+
+-- ── Email Verification Tokens ─────────────────────────────────────────────────
+-- 3-day tokens, consumed on successful verification.
+CREATE TABLE IF NOT EXISTS email_verifications (
+    token      TEXT PRIMARY KEY,
+    user_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at BIGINT NOT NULL,
+    created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT
+);
+CREATE INDEX IF NOT EXISTS idx_ev_user ON email_verifications(user_id);
 
 -- ── Chat History (Pro users only, E2E encrypted) ──────────────────────────────
 -- Content is AES-256-GCM encrypted client-side. Server sees only ciphertext.

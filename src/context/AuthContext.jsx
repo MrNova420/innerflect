@@ -238,8 +238,27 @@ export function AuthProvider({ children }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Refresh user data from /api/auth/me — called after email verification
+  const refreshUser = useCallback(async () => {
+    const token = localStorage.getItem(TOKEN_KEY)
+    if (!token) return
+    try {
+      const r = await fetch(`${API()}/api/auth/me`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      if (r.ok) {
+        const u = await r.json()
+        setUser(prev => ({ ...prev, ...u }))
+      }
+    } catch { /* silent */ }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Expose refreshUser globally so App.jsx can call it after email verification
+  useEffect(() => { window.__refreshAuth = refreshUser }, [refreshUser])
+
   return (
-    <AuthContext.Provider value={{ user, loading, encKey, login, register, googleLogin, logout, authFetch }}>
+    <AuthContext.Provider value={{ user, loading, encKey, login, register, googleLogin, logout, authFetch, refreshUser }}>
       {children}
     </AuthContext.Provider>
   )

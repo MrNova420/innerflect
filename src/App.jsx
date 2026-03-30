@@ -40,6 +40,8 @@ export default function App() {
   const [showUpgrade, setShowUpgrade] = useState(false)
   const [resetToken, setResetToken] = useState('')
   const [showReset, setShowReset]   = useState(false)
+  const [verifyStatus, setVerifyStatus] = useState(null) // null | 'pending' | 'ok' | 'error'
+  const [verifyMsg, setVerifyMsg]   = useState('')
 
   // Handle ?reset=<token> links from password reset emails
   useEffect(() => {
@@ -48,10 +50,32 @@ export default function App() {
     if (token) {
       setResetToken(token)
       setShowReset(true)
-      // Clean URL without reload
-      const clean = window.location.pathname
-      window.history.replaceState({}, '', clean)
+      window.history.replaceState({}, '', window.location.pathname)
     }
+  }, [])
+
+  // Handle ?verify=<token> links from email verification emails
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const token = params.get('verify')
+    if (!token) return
+    window.history.replaceState({}, '', window.location.pathname)
+    setVerifyStatus('pending')
+    const api = window.INNERFLECT_API_BASE || ''
+    fetch(`${api}/api/auth/verify-email?token=${encodeURIComponent(token)}`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.ok) {
+          setVerifyStatus('ok')
+          setVerifyMsg(data.message || 'Email verified!')
+          // Refresh auth state so email_verified updates in the UI
+          window.__refreshAuth?.()
+        } else {
+          setVerifyStatus('error')
+          setVerifyMsg(data.detail || 'Verification failed. The link may have expired.')
+        }
+      })
+      .catch(() => { setVerifyStatus('error'); setVerifyMsg('Network error — please try again.') })
   }, [])
 
   // Expose modal openers globally so Nav and pages can trigger them easily
@@ -63,6 +87,26 @@ export default function App() {
   return (
     <AuthProvider>
       <Nav onSignIn={() => { setAuthMode('login'); setShowAuth(true) }} />
+
+      {/* Email verification toast */}
+      {verifyStatus && verifyStatus !== 'pending' && (
+        <div style={{
+          position: 'fixed', top: '72px', left: '50%', transform: 'translateX(-50%)',
+          zIndex: 9999, padding: '0.75rem 1.5rem', borderRadius: '12px', fontSize: '0.9rem',
+          fontWeight: 600, boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+          background: verifyStatus === 'ok' ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)',
+          border: `1px solid ${verifyStatus === 'ok' ? 'rgba(16,185,129,0.4)' : 'rgba(239,68,68,0.4)'}`,
+          color: verifyStatus === 'ok' ? '#6ee7b7' : '#fca5a5',
+          display: 'flex', alignItems: 'center', gap: '0.6rem',
+          backdropFilter: 'blur(12px)',
+        }}>
+          {verifyStatus === 'ok' ? '✅' : '❌'} {verifyMsg}
+          <button onClick={() => setVerifyStatus(null)} style={{
+            background: 'none', border: 'none', color: 'inherit', cursor: 'pointer',
+            marginLeft: '0.5rem', opacity: 0.6, fontSize: '1rem', padding: 0,
+          }}>×</button>
+        </div>
+      )}
       <ErrorBoundary>
         <Suspense fallback={<PageLoader />}>
           <Routes>

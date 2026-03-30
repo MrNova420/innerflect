@@ -37,14 +37,15 @@ NGROK="$(command -v ngrok 2>/dev/null \
 _http_ok() { curl -sf --connect-timeout 3 "http://127.0.0.1:$1$2" >/dev/null 2>&1; }
 _ts_up()   { ps aux 2>/dev/null | grep -v grep | grep -q 'tailscale.*funnel'; }
 _ngrok_up(){ ps aux 2>/dev/null | grep -v grep | grep -q '[n]grok'; }
-_pg_up()   { pg_ctl -D "${PREFIX:-/usr}/var/lib/postgresql" status >/dev/null 2>&1; }
+# Use $PREFIX for Termux (same as setup-termux.sh); fall back to /usr for generic Linux
+_PG_DATA="${PGDATA:-${PREFIX:-/usr}/var/lib/postgresql}"
+_pg_up()   { pg_ctl -D "$_PG_DATA" status >/dev/null 2>&1; }
 
 # ── PostgreSQL ────────────────────────────────────────────────────────────────
 if command -v pg_ctl >/dev/null 2>&1; then
   if ! _pg_up; then
     log "PostgreSQL DOWN — restarting"
-    pg_ctl -D "${PREFIX:-/usr}/var/lib/postgresql" \
-      -l "$SITE_DIR/logs/postgres.log" start 2>/dev/null
+    pg_ctl -D "$_PG_DATA" -l "$SITE_DIR/logs/postgres.log" start 2>/dev/null
     sleep 3
     _pg_up \
       && { log "PostgreSQL OK"; alert "PostgreSQL auto-restarted ✅"; } \

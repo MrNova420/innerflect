@@ -417,15 +417,16 @@ def _require_admin(token: str, request: Request):
 # ═════════════════════════════════════════════════════════════════════════════
 #  6. JWT AUTH HELPERS
 # ═════════════════════════════════════════════════════════════════════════════
-JWT_SECRET   = _env("JWT_SECRET", "innerflect-jwt-secret-change-in-prod")
+JWT_SECRET   = _env("JWT_SECRET", "")
 JWT_EXP_DAYS = 7    # short-lived access tokens — silently refreshed by frontend
 RT_EXP_DAYS  = 90   # long-lived refresh tokens — rotated on each refresh
 
-if JWT_SECRET == "innerflect-jwt-secret-change-in-prod":
-    logging.warning(
-        "⚠️  JWT_SECRET is using the default insecure value! "
-        "Set JWT_SECRET in config/.env before going to production!"
-    )
+_DEFAULT_JWT = "innerflect-jwt-secret-change-in-prod"
+if not JWT_SECRET:
+    logging.warning("⚠️  JWT_SECRET not set — using insecure default. Set JWT_SECRET in config/.env before production!")
+    JWT_SECRET = _DEFAULT_JWT
+elif JWT_SECRET == _DEFAULT_JWT:
+    logging.warning("⚠️  JWT_SECRET is using the default insecure value! Set JWT_SECRET in config/.env!")
 
 def _make_token(user_id: int) -> str:
     exp = datetime.now(timezone.utc) + timedelta(days=JWT_EXP_DAYS)
@@ -436,10 +437,8 @@ def _make_refresh_token() -> str:
     return secrets.token_hex(32)
 
 async def _get_current_user(request: Request):
-    """Extract and validate JWT from Authorization header or query param."""
+    """Extract and validate JWT from Authorization Bearer header only."""
     token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
-    if not token:
-        token = request.query_params.get("token", "")
     if not token:
         return None
     try:
@@ -556,6 +555,7 @@ async def health(request: Request):
 #  9. AUTH ROUTES
 # ═════════════════════════════════════════════════════════════════════════════
 @app.post("/api/auth/register")
+@limiter.limit("5/minute")
 async def auth_register(body: RegisterIn, request: Request):
     if not body.email or not body.password or len(body.password) < 6:
         raise HTTPException(400, "Email and password (min 6 chars) required")
@@ -576,6 +576,7 @@ async def auth_register(body: RegisterIn, request: Request):
     return {**tokens, "user": dict(row)}
 
 @app.post("/api/auth/login")
+@limiter.limit("10/minute")
 async def auth_login(body: LoginIn, request: Request):
     async with _pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -592,6 +593,7 @@ async def auth_login(body: LoginIn, request: Request):
     return {**tokens, "user": user}
 
 @app.post("/api/auth/google")
+@limiter.limit("10/minute")
 async def auth_google(body: GoogleAuthIn, request: Request):
     """Validate Google ID token and create/login user."""
     try:
@@ -620,6 +622,7 @@ async def auth_google(body: GoogleAuthIn, request: Request):
     return {**tokens, "user": dict(row)}
 
 @app.get("/api/auth/me")
+@limiter.limit("60/minute")
 async def auth_me(request: Request):
     user = await _get_current_user(request)
     if not user:
@@ -627,6 +630,7 @@ async def auth_me(request: Request):
     return user
 
 @app.post("/api/auth/logout")
+@limiter.limit("20/minute")
 async def auth_logout(body: RefreshIn = None, request: Request = None):
     """Revoke refresh token on logout."""
     if body and body.refresh_token:
@@ -738,6 +742,7 @@ async def auth_reset_password(body: ResetPasswordIn, request: Request):
 #  10. SUBSCRIPTION
 # ═════════════════════════════════════════════════════════════════════════════
 @app.post("/api/subscription/upgrade")
+@limiter.limit("5/minute")
 async def subscription_upgrade(request: Request):
     user = await _get_current_user(request)
     if not user:
@@ -814,6 +819,7 @@ async def stripe_webhook(request: Request):
 #  USER PREFERENCES
 # ═════════════════════════════════════════════════════════════════════════════
 @app.get("/api/user/preferences")
+@limiter.limit("60/minute")
 async def get_user_preferences(request: Request):
     user = await _get_current_user(request)
     if not user:
@@ -837,24 +843,27 @@ async def set_user_preferences(body: PreferencesIn, request: Request):
     return {"preferences": updated}
 # ═════════════════════════════════════════════════════════════════════════════
 @app.post("/api/usage/record")
+@limiter.limit("20/minute")
 async def record_usage(body: UsageIn, request: Request):
-    """Record minutes used in a session (for throttling)."""
+    """Record minutes used in a session (for throttling). Cap per-call at 60min max."""
     user  = await _get_current_user(request)
     today = datetime.now(timezone.utc).date()
+    # Clamp incoming minutes to prevent artificial inflation
+    minutes = max(0, min(body.minutes, 60))
     if user:
         async with _pool.acquire() as conn:
             await conn.execute("""
                 INSERT INTO daily_usage (user_id, day, minutes_used) VALUES ($1,$2,$3)
                 ON CONFLICT (user_id, day) DO UPDATE
                 SET minutes_used = daily_usage.minutes_used + EXCLUDED.minutes_used
-            """, user["id"], today, body.minutes)
+            """, user["id"], today, minutes)
     elif body.fingerprint:
         async with _pool.acquire() as conn:
             await conn.execute("""
                 INSERT INTO anon_daily_usage (fingerprint, day, minutes_used) VALUES ($1,$2,$3)
                 ON CONFLICT (fingerprint, day) DO UPDATE
                 SET minutes_used = anon_daily_usage.minutes_used + EXCLUDED.minutes_used
-            """, body.fingerprint, today, body.minutes)
+            """, body.fingerprint, today, minutes)
     return {"ok": True}
 
 @app.get("/api/usage/today")
@@ -925,6 +934,7 @@ async def anon_record(body: AnonRecordIn, request: Request):
     return {"ok": True}
 # ═════════════════════════════════════════════════════════════════════════════
 @app.post("/api/chat/save")
+@limiter.limit("20/minute")
 async def save_chat(request: Request):
     user = await _get_current_user(request)
     if not user or user["plan"] != "pro":
@@ -951,6 +961,7 @@ async def save_chat(request: Request):
     return dict(row) if row else {"ok": False}
 
 @app.get("/api/chat/sessions")
+@limiter.limit("30/minute")
 async def list_chat_sessions(request: Request):
     user = await _get_current_user(request)
     if not user or user["plan"] != "pro":
@@ -964,6 +975,7 @@ async def list_chat_sessions(request: Request):
     return [dict(r) for r in rows]
 
 @app.get("/api/chat/session/{session_id}")
+@limiter.limit("30/minute")
 async def get_chat_session(session_id: str, request: Request):
     user = await _get_current_user(request)
     if not user or user["plan"] != "pro":
@@ -985,10 +997,11 @@ async def get_chat_session(session_id: str, request: Request):
     return dict(row)
 
 @app.delete("/api/chat/session/{session_id}")
+@limiter.limit("20/minute")
 async def delete_chat_session(session_id: str, request: Request):
     user = await _get_current_user(request)
-    if not user:
-        raise HTTPException(401, "Not authenticated")
+    if not user or user["plan"] != "pro":
+        raise HTTPException(403, "Pro plan required")
     async with _pool.acquire() as conn:
         await conn.execute(
             "DELETE FROM chat_history WHERE session_id=$1 AND user_id=$2",
@@ -1073,6 +1086,7 @@ async def record_perf(request: Request, body: PerfMetricIn):
 
 # ── Messages ──────────────────────────────────────────────────────────────
 @app.get("/api/admin/messages")
+@limiter.limit("30/minute")
 async def admin_messages(request: Request, token: str = ""):
     _require_admin(token, request)
     async with _pool.acquire() as con:
@@ -1086,6 +1100,7 @@ async def admin_messages(request: Request, token: str = ""):
     ]}
 
 @app.delete("/api/admin/messages/{msg_id}")
+@limiter.limit("30/minute")
 async def admin_delete_message(msg_id: int, request: Request, token: str = ""):
     _require_admin(token, request)
     async with _pool.acquire() as con:
@@ -1094,6 +1109,7 @@ async def admin_delete_message(msg_id: int, request: Request, token: str = ""):
 
 # ── System health ─────────────────────────────────────────────────────────
 @app.get("/api/admin/system")
+@limiter.limit("15/minute")
 async def admin_system(request: Request, token: str = ""):
     _require_admin(token, request)
     import psutil, platform
@@ -1120,6 +1136,7 @@ async def admin_system(request: Request, token: str = ""):
 
 # ── Service health ────────────────────────────────────────────────────────
 @app.get("/api/admin/services")
+@limiter.limit("15/minute")
 async def admin_services(request: Request, token: str = ""):
     _require_admin(token, request)
     import subprocess, urllib.request as _ur
@@ -1162,6 +1179,7 @@ async def admin_services(request: Request, token: str = ""):
 
 # ── Redis details ─────────────────────────────────────────────────────────
 @app.get("/api/admin/redis")
+@limiter.limit("15/minute")
 async def admin_redis(request: Request, token: str = ""):
     _require_admin(token, request)
     r = _get_redis()
@@ -1191,6 +1209,7 @@ async def admin_redis(request: Request, token: str = ""):
 
 # ── Analytics ─────────────────────────────────────────────────────────────
 @app.get("/api/admin/analytics")
+@limiter.limit("15/minute")
 async def admin_analytics(request: Request, token: str = "", days: int = 14):
     _require_admin(token, request)
     async with _pool.acquire() as con:
@@ -1218,6 +1237,7 @@ async def admin_analytics(request: Request, token: str = "", days: int = 14):
 
 # Real-time performance analytics
 @app.get("/api/admin/analytics/perf")
+@limiter.limit("10/minute")
 async def admin_perf_analytics(request: Request, token: str = "", hours: int = 24):
     _require_admin(token, request)
     async with _pool.acquire() as con:
@@ -1283,6 +1303,7 @@ async def admin_perf_analytics(request: Request, token: str = "", hours: int = 2
 
 # ── Chat stats ────────────────────────────────────────────────────────────
 @app.get("/api/admin/chat")
+@limiter.limit("20/minute")
 async def admin_chat(request: Request, token: str = ""):
     _require_admin(token, request)
     # Chat service is disabled; return stub stats
@@ -1290,6 +1311,7 @@ async def admin_chat(request: Request, token: str = ""):
 
 # ── Log tail ──────────────────────────────────────────────────────────────
 @app.get("/api/admin/log/{name}")
+@limiter.limit("20/minute")
 async def admin_log(name: str, request: Request, token: str = "", lines: int = 80):
     _require_admin(token, request)
     allowed = {"api", "caddy", "chat", "tunnel", "watchdog"}
@@ -1309,6 +1331,7 @@ async def admin_log(name: str, request: Request, token: str = "", lines: int = 8
 # ── URL shortener ─────────────────────────────────────────────────────────
 # ── Daily Discord report ──────────────────────────────────────────────────
 @app.get("/api/admin/daily-report")
+@limiter.limit("5/minute")
 async def daily_report(request: Request, token: str = ""):
     """POST to this via cron or n8n to push daily stats to Discord."""
     _require_admin(token, request)
@@ -1339,6 +1362,7 @@ async def daily_report(request: Request, token: str = ""):
 _SITE_DIR = str(Path(__file__).parent.parent)
 
 @app.post("/api/admin/restart/{service}")
+@limiter.limit("3/minute")
 async def admin_restart(service: str, request: Request, token: str = ""):
     """Restart an Innerflect service. service: api | chat | caddy | ngrok"""
     _require_admin(token, request)
@@ -1387,6 +1411,7 @@ async def admin_restart(service: str, request: Request, token: str = ""):
 
 # ── Redis flush cache ─────────────────────────────────────────────────────
 @app.post("/api/admin/redis/flush")
+@limiter.limit("3/minute")
 async def admin_redis_flush(request: Request, token: str = ""):
     """Flush all rate-limit / cache keys from Redis."""
     _require_admin(token, request)
@@ -1439,12 +1464,14 @@ async def ghostslayer_track(body: SlayerEvent, request: Request):
     return {"ok": True}
 
 @app.get("/api/admin/ads")
+@limiter.limit("30/minute")
 async def admin_ads_get(request: Request, token: str = ""):
     """Return current ads.json config."""
     _require_admin(token, request)
     return _load_ads()
 
 @app.post("/api/admin/ads/{ad_id}/toggle")
+@limiter.limit("30/minute")
 async def admin_ads_toggle(ad_id: str, request: Request, token: str = ""):
     """Toggle a single ad on/off."""
     _require_admin(token, request)
@@ -1457,6 +1484,7 @@ async def admin_ads_toggle(ad_id: str, request: Request, token: str = ""):
     raise HTTPException(404, f"ad '{ad_id}' not found")
 
 @app.post("/api/admin/ads/bulk")
+@limiter.limit("10/minute")
 async def admin_ads_bulk(request: Request, token: str = ""):
     """Enable or disable all ads at once. Body: {"action":"enable"|"disable"}"""
     _require_admin(token, request)
@@ -1471,6 +1499,7 @@ async def admin_ads_bulk(request: Request, token: str = ""):
     return {"ok": True, "action": action, "count": len(cfg.get("ads", []))}
 
 @app.get("/api/admin/ads/stats")
+@limiter.limit("15/minute")
 async def admin_ads_stats(request: Request, token: str = ""):
     """Return impression + click counts per ad, plus daily totals."""
     _require_admin(token, request)
@@ -1525,6 +1554,7 @@ class SmartlinkAdd(BaseModel):
     url: str
 
 @app.get("/api/admin/ads/smartlinks")
+@limiter.limit("20/minute")
 async def admin_smartlinks_get(request: Request, token: str = ""):
     """Return the smartlink_pool URL list and global config."""
     _require_admin(token, request)
@@ -1535,6 +1565,7 @@ async def admin_smartlinks_get(request: Request, token: str = ""):
     }
 
 @app.post("/api/admin/ads/smartlinks")
+@limiter.limit("20/minute")
 async def admin_smartlinks_add(body: SmartlinkAdd, request: Request, token: str = ""):
     """Add a URL to the smartlink pool."""
     _require_admin(token, request)
@@ -1551,6 +1582,7 @@ async def admin_smartlinks_add(body: SmartlinkAdd, request: Request, token: str 
     return {"ok": True, "pool": pool}
 
 @app.delete("/api/admin/ads/smartlinks/{idx}")
+@limiter.limit("20/minute")
 async def admin_smartlinks_del(idx: int, request: Request, token: str = ""):
     """Remove a URL from the pool by index."""
     _require_admin(token, request)
@@ -1563,6 +1595,7 @@ async def admin_smartlinks_del(idx: int, request: Request, token: str = ""):
     return {"ok": True, "removed": removed, "pool": pool}
 
 @app.patch("/api/admin/ads/smartlinks/config")
+@limiter.limit("15/minute")
 async def admin_smartlinks_config(request: Request, token: str = ""):
     """Update smartlink_global settings. Body: {enabled, delay_between_ms, max_per_session, start_after_ms}"""
     _require_admin(token, request)
@@ -1579,6 +1612,7 @@ async def admin_smartlinks_config(request: Request, token: str = ""):
 # ── Turbo mode toggle ─────────────────────────────────────────────────────
 
 @app.patch("/api/admin/ads/turbo")
+@limiter.limit("15/minute")
 async def admin_ads_turbo(request: Request, token: str = ""):
     """Toggle turbo mode on/off. Body: {enabled: bool, min_gap_ms: int}"""
     _require_admin(token, request)
@@ -1606,6 +1640,7 @@ class AdAdd(BaseModel):
     delay_between_ms: int  = 3000
 
 @app.post("/api/admin/ads/add")
+@limiter.limit("15/minute")
 async def admin_ads_add(body: AdAdd, request: Request, token: str = ""):
     """Append a new ad slot to ads.json."""
     _require_admin(token, request)
@@ -1630,6 +1665,7 @@ async def admin_ads_add(body: AdAdd, request: Request, token: str = ""):
     return {"ok": True, "ad": new_ad}
 
 @app.put("/api/admin/ads/{ad_id}")
+@limiter.limit("20/minute")
 async def admin_ads_update(ad_id: str, request: Request, token: str = ""):
     """Update fields on an existing ad slot."""
     _require_admin(token, request)
@@ -1646,6 +1682,7 @@ async def admin_ads_update(ad_id: str, request: Request, token: str = ""):
     raise HTTPException(404, f"Ad '{ad_id}' not found")
 
 @app.delete("/api/admin/ads/{ad_id}")
+@limiter.limit("20/minute")
 async def admin_ads_delete(ad_id: str, request: Request, token: str = ""):
     """Delete an ad slot by ID."""
     _require_admin(token, request)
@@ -1680,12 +1717,14 @@ def _check_anon_ai_limit(ip: str) -> bool:
     return True
 
 @app.get("/api/ai/status")
+@limiter.limit("30/minute")
 async def ai_status():
     """Check if server-side AI is configured."""
     has_key = bool(_env("OPENROUTER_API_KEY", "").strip())
     return {"server_ai_available": has_key, "mode": "openrouter" if has_key else "none"}
 
 @app.post("/api/ai/chat")
+@limiter.limit("20/minute")
 async def ai_chat(request: Request):
     """Server-side AI chat via OpenRouter. Used as WebGPU fallback."""
     body = await request.json()

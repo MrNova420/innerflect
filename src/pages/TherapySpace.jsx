@@ -8,6 +8,8 @@ import UpgradeModal from '../components/UpgradeModal'
 import { MODELS, STORAGE_KEY, detectBestModel, shouldProgressiveLoad, markFirstVisitDone, getQuickModelId, getCompatibleModels } from '../hooks/useModelDetect'
 import { useSessionLimit } from '../hooks/useSessionLimit'
 import { checkServerAIAvailable, sendServerMessage } from '../hooks/useServerAI'
+import { useAuth } from '../context/AuthContext'
+import { encryptMessages, decryptMessages } from '../utils/crypto'
 
 const API_BASE = () =>
   (typeof window !== 'undefined' && (window.API_BASE || window.INNERFLECT_API_BASE)) || ''
@@ -327,6 +329,160 @@ function TypingIndicator() {
   )
 }
 
+function ChatHistoryDrawer({ open, onClose, authFetch, encKey, setMessages, setSessionId, currentSessionId }) {
+  const [sessions, setSessions] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const [deletingId, setDeletingId] = useState(null)
+  const [loadingSessionId, setLoadingSessionId] = useState(null)
+
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    authFetch(API_BASE() + '/api/chat/sessions')
+      .then(r => r.json())
+      .then(data => { if (!cancelled) setSessions(Array.isArray(data) ? data : []) })
+      .catch(() => { if (!cancelled) setError('Failed to load history') })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [open])
+
+  async function loadSession(session_id) {
+    setLoadingSessionId(session_id)
+    try {
+      const r = await authFetch(API_BASE() + `/api/chat/session/${session_id}`)
+      const data = await r.json()
+      const msgs = await decryptMessages(encKey, data.messages)
+      setMessages(msgs)
+      setSessionId(session_id)
+      onClose()
+    } catch { /* silent */ } finally { setLoadingSessionId(null) }
+  }
+
+  async function deleteSession(session_id, e) {
+    e.stopPropagation()
+    setDeletingId(session_id)
+    try {
+      await authFetch(API_BASE() + `/api/chat/session/${session_id}`, { method: 'DELETE' })
+      setSessions(prev => prev.filter(s => s.session_id !== session_id))
+    } catch { /* silent */ } finally { setDeletingId(null) }
+  }
+
+  function newChat() {
+    setMessages([])
+    setSessionId(null)
+    onClose()
+  }
+
+  return (
+    <AnimatePresence>
+      {open && (
+        <>
+          <motion.div
+            key="history-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            onClick={onClose}
+            style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }}
+          />
+          <motion.div
+            key="history-drawer"
+            initial={{ x: '100%' }}
+            animate={{ x: 0 }}
+            exit={{ x: '100%' }}
+            transition={{ type: 'spring', damping: 28, stiffness: 220 }}
+            style={{
+              position: 'fixed', top: 0, right: 0, bottom: 0, zIndex: 301,
+              width: 'min(380px, 100vw)',
+              background: 'rgba(10,10,20,0.97)',
+              backdropFilter: 'blur(20px)',
+              border: '1px solid rgba(255,255,255,0.08)',
+              borderRadius: '16px 0 0 16px',
+              display: 'flex', flexDirection: 'column',
+              overflow: 'hidden',
+            }}
+          >
+            {/* Header */}
+            <div style={{ padding: '1.25rem 1.25rem 1rem', borderBottom: '1px solid rgba(255,255,255,0.07)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span style={{ color: '#e2e8f0', fontWeight: 700, fontSize: '1rem' }}>Chat History</span>
+                {encKey && (
+                  <span style={{ fontSize: '0.7rem', padding: '1px 7px', borderRadius: '100px', background: 'rgba(124,58,237,0.2)', color: '#a78bfa', border: '1px solid rgba(124,58,237,0.3)' }}>
+                    🔒 E2E Encrypted
+                  </span>
+                )}
+              </div>
+              <button
+                onClick={onClose}
+                style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: '1.4rem', padding: '0.25rem', lineHeight: 1 }}
+              >×</button>
+            </div>
+
+            {/* New chat */}
+            <div style={{ padding: '0.75rem 1.25rem', borderBottom: '1px solid rgba(255,255,255,0.05)', flexShrink: 0 }}>
+              <button
+                onClick={newChat}
+                style={{ width: '100%', padding: '0.6rem', borderRadius: '10px', background: 'rgba(124,58,237,0.15)', border: '1px solid rgba(124,58,237,0.3)', color: '#a78bfa', fontWeight: 600, cursor: 'pointer', fontSize: '0.85rem' }}
+              >
+                + New Chat
+              </button>
+            </div>
+
+            {/* Session list */}
+            <div style={{ flex: 1, overflowY: 'auto', padding: '0.75rem 1.25rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              {loading && [0, 1, 2, 3].map(i => (
+                <div key={i} style={{ height: '70px', borderRadius: '10px', background: 'rgba(255,255,255,0.04)', opacity: 1 - i * 0.15 }} />
+              ))}
+              {error && (
+                <p style={{ color: '#f87171', fontSize: '0.85rem', textAlign: 'center', paddingTop: '2rem' }}>{error}</p>
+              )}
+              {!loading && !error && sessions.length === 0 && (
+                <p style={{ color: '#475569', fontSize: '0.85rem', textAlign: 'center', paddingTop: '2rem' }}>No saved chats yet</p>
+              )}
+              {!loading && sessions.map(s => (
+                <div
+                  key={s.session_id}
+                  onClick={() => !loadingSessionId && loadSession(s.session_id)}
+                  style={{
+                    padding: '0.75rem 0.875rem',
+                    borderRadius: '10px',
+                    background: currentSessionId === s.session_id ? 'rgba(124,58,237,0.12)' : 'rgba(255,255,255,0.03)',
+                    border: `1px solid ${currentSessionId === s.session_id ? 'rgba(124,58,237,0.3)' : 'rgba(255,255,255,0.06)'}`,
+                    cursor: 'pointer',
+                    display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.5rem',
+                    opacity: loadingSessionId === s.session_id ? 0.6 : 1,
+                    transition: 'background 0.15s, border-color 0.15s',
+                  }}
+                >
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ color: '#e2e8f0', fontSize: '0.88rem', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {s.title || 'Untitled'}
+                    </div>
+                    <div style={{ color: '#475569', fontSize: '0.75rem', marginTop: '0.2rem' }}>
+                      {s.model?.split('-')[0] || 'AI'} · {new Date(s.updated_at || s.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                      {s.message_count ? ` · ${s.message_count} msgs` : ''}
+                    </div>
+                  </div>
+                  <button
+                    onClick={e => deleteSession(s.session_id, e)}
+                    disabled={deletingId === s.session_id}
+                    title="Delete session"
+                    style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', fontSize: '1rem', padding: '0.25rem', flexShrink: 0, lineHeight: 1, opacity: deletingId === s.session_id ? 0.4 : 1 }}
+                  >🗑</button>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        </>
+      )}
+    </AnimatePresence>
+  )
+}
+
 export default function TherapySpace() {
   const [engine, setEngine] = useState(null)
   const [isReady, setIsReady] = useState(false)
@@ -349,6 +505,9 @@ export default function TherapySpace() {
   const [showUpgradeModal, setShowUpgradeModal] = useState(false)
   const [serverMode, setServerMode] = useState(false)
   const [serverAIAvailable, setServerAIAvailable] = useState(false)
+  const [sessionId, setSessionId] = useState(null)
+  const [anonBlocked, setAnonBlocked] = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
   const messagesEndRef = useRef(null)
   const engineRef = useRef(null)
   const bgEngineRef = useRef(null) // background engine loading in parallel
@@ -356,6 +515,8 @@ export default function TherapySpace() {
   const rafRef = useRef(null)
   const abortRef = useRef(null)
   const lastBytesRef = useRef({ bytes: 0, time: Date.now() })
+  const latestMessagesRef = useRef([]) // always current — used for auto-save
+  const prevGeneratingRef = useRef(false) // tracks isGenerating transitions
 
   const {
     plan,
@@ -368,6 +529,9 @@ export default function TherapySpace() {
     startSession,
     stopSession,
   } = useSessionLimit()
+
+  const { user, encKey, authFetch } = useAuth() || {}
+  const autoSaveEnabled = user?.plan === 'pro'
 
   // Hard-block chat when either limit fires — only cleared by signing in
   const isBlocked = isExpired || showNudge
@@ -384,6 +548,16 @@ export default function TherapySpace() {
 
   useEffect(() => {
     // NOTE: No impression tracking on the therapy page — privacy promise
+    // Anon server-side rate limit check
+    if (!user) {
+      const fp = localStorage.getItem('innerflect_fp')
+      if (fp) {
+        fetch(`${API_BASE()}/api/usage/anon-check?fingerprint=${encodeURIComponent(fp)}`)
+          .then(r => r.json())
+          .then(data => { if (data.allowed === false) setAnonBlocked(true) })
+          .catch(() => {}) // silent — don't block if check fails
+      }
+    }
     // Check server AI availability in parallel (used as WebGPU fallback)
     document.title = 'Your Session — Innerflect'
     document.querySelector('meta[name="description"]')?.setAttribute('content',
@@ -400,6 +574,44 @@ export default function TherapySpace() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+  // Keep latestMessagesRef in sync so _autoSave can access current messages
+  useEffect(() => { latestMessagesRef.current = messages }, [messages])
+
+  function _generateTitle(msgs) {
+    const first = msgs.find(m => m.role === 'user')
+    if (!first?.content) return 'Chat Session'
+    return first.content.slice(0, 60)
+  }
+
+  async function _autoSave(msgs) {
+    if (!autoSaveEnabled || !authFetch) return
+    try {
+      const payload = encKey ? await encryptMessages(encKey, msgs) : msgs
+      const res = await authFetch(API_BASE() + '/api/chat/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...(sessionId ? { session_id: sessionId } : {}),
+          title: _generateTitle(msgs),
+          messages: payload,
+          model: activeModel,
+        }),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        if (data.session_id) setSessionId(data.session_id)
+      }
+    } catch { /* silent — never interrupt the user */ }
+  }
+
+  // Trigger auto-save when generation transitions from active → complete
+  useEffect(() => {
+    if (prevGeneratingRef.current && !isGenerating && autoSaveEnabled && latestMessagesRef.current.length > 1) {
+      _autoSave(latestMessagesRef.current)
+    }
+    prevGeneratingRef.current = isGenerating
+  })
 
   async function initEngine(forceModelId = null, stepDownDepth = 0) {
     // Check WebGPU availability — including null adapter (GPU not exposed to browser)
@@ -878,6 +1090,20 @@ export default function TherapySpace() {
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            {user?.plan === 'pro' && (
+              <button
+                onClick={() => setShowHistory(true)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '0.4rem',
+                  padding: '0.3rem 0.75rem', borderRadius: '100px',
+                  background: 'rgba(124,58,237,0.1)', border: '1px solid rgba(124,58,237,0.25)',
+                  color: '#a78bfa', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                📂 History
+              </button>
+            )}
             <ActiveModelBadge modelId={activeModel} fromCache={fromCache} serverMode={serverMode} />
             {!serverMode && <ModelPicker selectedId={activeModel} onSelect={switchModel} disabled={isGenerating} />}
           </div>
@@ -926,68 +1152,82 @@ export default function TherapySpace() {
             gap: '0.75rem',
             alignItems: 'flex-end',
           }}>
-            <textarea
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() } }}
-              placeholder={isBlocked ? 'Daily limit reached' : 'What\'s on your mind...'}
-              rows={2}
-              style={{
-                flex: 1,
-                background: 'rgba(255,255,255,0.04)',
-                border: '1px solid rgba(255,255,255,0.08)',
-                borderRadius: '12px',
-                padding: '0.85rem 1rem',
-                color: '#f1f5f9',
-                fontSize: '0.95rem',
-                resize: 'none',
-                outline: 'none',
-                fontFamily: 'inherit',
-                lineHeight: 1.5,
-                transition: 'border-color 0.2s',
-                opacity: isBlocked ? 0.4 : 1,
-              }}
-              onFocus={e => !isBlocked && (e.target.style.borderColor = 'rgba(124,58,237,0.5)')}
-              onBlur={e => e.target.style.borderColor = 'rgba(255,255,255,0.08)'}
-              disabled={isGenerating || isBlocked}
-            />
-            <motion.button
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              onClick={sendMessage}
-              disabled={isGenerating || !input.trim() || isBlocked}
-              style={{
-                background: input.trim() && !isGenerating && !isBlocked ? 'linear-gradient(135deg, #7c3aed, #06b6d4)' : 'rgba(255,255,255,0.06)',
-                border: 'none',
-                borderRadius: '12px',
-                width: '48px',
-                height: '48px',
-                cursor: input.trim() && !isGenerating && !isBlocked ? 'pointer' : 'not-allowed',
-                fontSize: '1.2rem',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                transition: 'background 0.2s',
-                flexShrink: 0,
-              }}
-            >
-              ↑
-            </motion.button>
-            {isGenerating && canStop && (
-              <motion.button
-                initial={{ opacity: 0, scale: 0.85 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.85 }}
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={() => { abortRef.current?.abort(); setIsGenerating(false) }}
-                style={{
-                  background: 'rgba(239,68,68,0.15)',
-                  border: '1px solid rgba(239,68,68,0.4)',
-                  borderRadius: '100px',
-                  padding: '0 1rem',
-                  height: '48px',
-                  cursor: 'pointer',
+            {anonBlocked ? (
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem', padding: '0.5rem 0' }}>
+                <p style={{ color: '#94a3b8', fontSize: '0.9rem', textAlign: 'center', margin: 0 }}>
+                  Daily limit reached — sign up free for 60 min/day
+                </p>
+                <button
+                  onClick={() => window.__openAuth?.('signup')}
+                  style={{ padding: '0.6rem 1.5rem', borderRadius: '10px', background: 'linear-gradient(135deg, #7c3aed, #06b6d4)', color: '#fff', border: 'none', fontWeight: 700, cursor: 'pointer', fontSize: '0.9rem' }}
+                >
+                  Sign up free
+                </button>
+              </div>
+            ) : (
+              <>
+                <textarea
+                  value={input}
+                  onChange={e => setInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() } }}
+                  placeholder={isBlocked ? 'Daily limit reached' : 'What\'s on your mind...'}
+                  rows={2}
+                  style={{
+                    flex: 1,
+                    background: 'rgba(255,255,255,0.04)',
+                    border: '1px solid rgba(255,255,255,0.08)',
+                    borderRadius: '12px',
+                    padding: '0.85rem 1rem',
+                    color: '#f1f5f9',
+                    fontSize: '0.95rem',
+                    resize: 'none',
+                    outline: 'none',
+                    fontFamily: 'inherit',
+                    lineHeight: 1.5,
+                    transition: 'border-color 0.2s',
+                    opacity: isBlocked ? 0.4 : 1,
+                  }}
+                  onFocus={e => !isBlocked && (e.target.style.borderColor = 'rgba(124,58,237,0.5)')}
+                  onBlur={e => e.target.style.borderColor = 'rgba(255,255,255,0.08)'}
+                  disabled={isGenerating || isBlocked}
+                />
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={sendMessage}
+                  disabled={isGenerating || !input.trim() || isBlocked}
+                  style={{
+                    background: input.trim() && !isGenerating && !isBlocked ? 'linear-gradient(135deg, #7c3aed, #06b6d4)' : 'rgba(255,255,255,0.06)',
+                    border: 'none',
+                    borderRadius: '12px',
+                    width: '48px',
+                    height: '48px',
+                    cursor: input.trim() && !isGenerating && !isBlocked ? 'pointer' : 'not-allowed',
+                    fontSize: '1.2rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    transition: 'background 0.2s',
+                    flexShrink: 0,
+                  }}
+                >
+                  ↑
+                </motion.button>
+                {isGenerating && canStop && (
+                  <motion.button
+                    initial={{ opacity: 0, scale: 0.85 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.85 }}
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    onClick={() => { abortRef.current?.abort(); setIsGenerating(false) }}
+                    style={{
+                      background: 'rgba(239,68,68,0.15)',
+                      border: '1px solid rgba(239,68,68,0.4)',
+                      borderRadius: '100px',
+                      padding: '0 1rem',
+                      height: '48px',
+                      cursor: 'pointer',
                   fontSize: '0.82rem',
                   fontWeight: 600,
                   color: '#f87171',
@@ -1001,9 +1241,22 @@ export default function TherapySpace() {
                 🛑 Stop
               </motion.button>
             )}
+              </>
+            )}
           </div>
         </GlassSurface>
       </div>
+
+      {/* Chat history drawer — Pro users only */}
+      <ChatHistoryDrawer
+        open={showHistory}
+        onClose={() => setShowHistory(false)}
+        authFetch={authFetch}
+        encKey={encKey}
+        setMessages={setMessages}
+        setSessionId={setSessionId}
+        currentSessionId={sessionId}
+      />
 
       {/* Upgrade toast — shown when background model finishes loading */}
       {upgradeReady && (

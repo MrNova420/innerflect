@@ -5,6 +5,7 @@ import Footer from './components/Footer'
 import { AuthProvider } from './context/AuthContext'
 import AuthModal from './components/AuthModal'
 import UpgradeModal from './components/UpgradeModal'
+import ResetPasswordModal from './components/ResetPasswordModal'
 import ErrorBoundary from './components/ErrorBoundary'
 
 // Lazy-load heavy pages so the initial bundle stays tiny
@@ -34,9 +35,24 @@ function PageLoader() {
 }
 
 export default function App() {
-  const [showAuth, setShowAuth] = useState(false)
-  const [authMode, setAuthMode] = useState('login')
+  const [showAuth, setShowAuth]     = useState(false)
+  const [authMode, setAuthMode]     = useState('login')
   const [showUpgrade, setShowUpgrade] = useState(false)
+  const [resetToken, setResetToken] = useState('')
+  const [showReset, setShowReset]   = useState(false)
+
+  // Handle ?reset=<token> links from password reset emails
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const token = params.get('reset')
+    if (token) {
+      setResetToken(token)
+      setShowReset(true)
+      // Clean URL without reload
+      const clean = window.location.pathname
+      window.history.replaceState({}, '', clean)
+    }
+  }, [])
 
   // Expose modal openers globally so Nav and pages can trigger them easily
   useEffect(() => {
@@ -72,6 +88,12 @@ export default function App() {
           onClose={() => setShowUpgrade(false)}
           onLogin={() => { setShowUpgrade(false); setAuthMode('login'); setShowAuth(true) }}
           onRegister={() => { setShowUpgrade(false); setAuthMode('signup'); setShowAuth(true) }}
+        />
+      )}
+      {showReset && (
+        <ResetPasswordModal
+          token={resetToken}
+          onClose={() => { setShowReset(false); setAuthMode('login'); setShowAuth(true) }}
         />
       )}
     </AuthProvider>

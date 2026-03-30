@@ -663,6 +663,9 @@ export default function TherapySpace() {
   const [anonBlocked, setAnonBlocked] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const messagesEndRef = useRef(null)
+  const messagesContainerRef = useRef(null)
+  const textareaRef = useRef(null)
+  const [atBottom, setAtBottom] = useState(true)
   const engineRef = useRef(null)
   const bgEngineRef = useRef(null) // background engine loading in parallel
   const streamBufRef = useRef('')
@@ -726,12 +729,33 @@ export default function TherapySpace() {
     }
   }, [])
 
+  // Auto-scroll to bottom when new messages arrive — but only if already near bottom
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+    if (atBottom) messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages, atBottom])
+
+  // Track whether user has scrolled up (so we don't force-scroll on new chunks)
+  useEffect(() => {
+    const el = messagesContainerRef.current
+    if (!el) return
+    const onScroll = () => {
+      const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+      setAtBottom(distFromBottom < 80)
+    }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [])
 
   // Keep latestMessagesRef in sync so _autoSave can access current messages
   useEffect(() => { latestMessagesRef.current = messages }, [messages])
+
+  // Auto-resize textarea as user types
+  useEffect(() => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = Math.min(el.scrollHeight, 160) + 'px'
+  }, [input])
 
   // ─── Auto-compact: persist context to localStorage per model ──────────────
   // Saves summary + recent messages so context survives page refresh / model reload.
@@ -1087,6 +1111,9 @@ export default function TherapySpace() {
 
   async function sendMessage() {
     if (!input.trim() || isGenerating) return
+    // Reset textarea height
+    if (textareaRef.current) { textareaRef.current.style.height = 'auto' }
+    setAtBottom(true) // force scroll on next message
     if (serverMode) {
       const abortController = new AbortController()
       abortRef.current = abortController
@@ -1358,12 +1385,18 @@ export default function TherapySpace() {
   }
 
   return (
-    <div style={{ paddingTop: '64px', minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ paddingTop: '64px', minHeight: '100dvh', display: 'flex', flexDirection: 'column' }}>
       <style>{`
         @media (max-width: 480px) {
           .chat-privacy-full { display: none; }
           .chat-privacy-notice { flex: none !important; }
         }
+        /* Ensure full-height chat on mobile with virtual keyboard */
+        @supports (height: 100dvh) {
+          .therapy-root { min-height: 100dvh !important; }
+        }
+        /* Smooth cursor blink */
+        @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
       `}</style>
       <div style={{ flex: 1, maxWidth: '800px', width: '100%', margin: '0 auto', padding: 'clamp(0.5rem, 3vw, 1.5rem)', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
         {/* Top bar: privacy notice + model info */}
@@ -1411,9 +1444,12 @@ export default function TherapySpace() {
         </motion.div>
 
         {/* Chat window */}
-        <GlassSurface style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', height: 0, minHeight: 'min(calc(100vh - 280px), 70vh)' }}>
+        <GlassSurface style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', height: 0, minHeight: 'min(calc(100dvh - 280px), 70vh)', position: 'relative' }}>
           {/* Messages */}
-          <div style={{ flex: 1, overflowY: 'auto', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div
+            ref={messagesContainerRef}
+            style={{ flex: 1, overflowY: 'auto', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}
+          >
             <AnimatePresence>
               {messages.map((msg, i) => (
                 <motion.div
@@ -1437,7 +1473,20 @@ export default function TherapySpace() {
                     wordBreak: 'break-word',
                     whiteSpace: 'pre-wrap',
                   }}>
-                    {msg.content || (isGenerating && i === messages.length - 1 && <TypingIndicator />)}
+                    {msg.content
+                      ? <>
+                          {msg.content}
+                          {/* Streaming cursor on the last assistant message while generating */}
+                          {isGenerating && msg.role === 'assistant' && i === messages.length - 1 && (
+                            <motion.span
+                              animate={{ opacity: [1, 0, 1] }}
+                              transition={{ duration: 0.9, repeat: Infinity }}
+                              style={{ display: 'inline-block', width: '2px', height: '1em', background: '#a78bfa', marginLeft: '2px', verticalAlign: 'text-bottom', borderRadius: '1px' }}
+                            />
+                          )}
+                        </>
+                      : (isGenerating && i === messages.length - 1 && <TypingIndicator />)
+                    }
                   </div>
                 </motion.div>
               ))}
@@ -1487,13 +1536,34 @@ export default function TherapySpace() {
             <div ref={messagesEndRef} />
           </div>
 
+          {/* Scroll-to-bottom button — only when user has scrolled up */}
+          {!atBottom && (
+            <motion.button
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 8 }}
+              onClick={() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); setAtBottom(true) }}
+              style={{
+                position: 'absolute', bottom: '5rem', right: '1rem',
+                background: 'rgba(124,58,237,0.85)', border: 'none', borderRadius: '50%',
+                width: '36px', height: '36px', cursor: 'pointer', color: '#fff',
+                fontSize: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                backdropFilter: 'blur(8px)', boxShadow: '0 4px 16px rgba(124,58,237,0.4)',
+              }}
+            >
+              ↓
+            </motion.button>
+          )}
+
           {/* Input */}
           <div style={{
             borderTop: '1px solid rgba(255,255,255,0.06)',
             padding: 'clamp(0.6rem, 2vw, 1rem) clamp(0.75rem, 3vw, 1.5rem)',
+            paddingBottom: 'clamp(0.9rem, 2vw, 1.25rem)',
             display: 'flex',
             gap: '0.75rem',
             alignItems: 'flex-end',
+            position: 'relative',
           }}>
             {anonBlocked ? (
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem', padding: '0.5rem 0' }}>
@@ -1510,11 +1580,17 @@ export default function TherapySpace() {
             ) : (
               <>
                 <textarea
+                  ref={textareaRef}
                   value={input}
                   onChange={e => setInput(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() } }}
-                  placeholder={isBlocked ? 'Daily limit reached' : 'What\'s on your mind...'}
-                  rows={2}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && !e.shiftKey && !isMobileDevice()) {
+                      e.preventDefault()
+                      sendMessage()
+                    }
+                  }}
+                  placeholder={isBlocked ? 'Daily limit reached' : "What's on your mind..."}
+                  rows={1}
                   style={{
                     flex: 1,
                     background: 'rgba(255,255,255,0.04)',
@@ -1529,6 +1605,9 @@ export default function TherapySpace() {
                     lineHeight: 1.5,
                     transition: 'border-color 0.2s',
                     opacity: isBlocked ? 0.4 : 1,
+                    minHeight: '44px',
+                    maxHeight: '160px',
+                    overflowY: 'auto',
                   }}
                   onFocus={e => !isBlocked && (e.target.style.borderColor = 'rgba(124,58,237,0.5)')}
                   onBlur={e => e.target.style.borderColor = 'rgba(255,255,255,0.08)'}
@@ -1543,10 +1622,10 @@ export default function TherapySpace() {
                     background: input.trim() && !isGenerating && !isBlocked ? 'linear-gradient(135deg, #7c3aed, #06b6d4)' : 'rgba(255,255,255,0.06)',
                     border: 'none',
                     borderRadius: '12px',
-                    width: '48px',
-                    height: '48px',
+                    width: '52px',
+                    height: '52px',
                     cursor: input.trim() && !isGenerating && !isBlocked ? 'pointer' : 'not-allowed',
-                    fontSize: '1.2rem',
+                    fontSize: '1.3rem',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -1604,6 +1683,12 @@ export default function TherapySpace() {
               >
                 🛑 Stop
               </motion.button>
+            )}
+            {/* Desktop hint — hidden on mobile */}
+            {!isGenerating && !isMobileDevice() && input.length === 0 && (
+              <span style={{ position: 'absolute', bottom: '-1.4rem', left: 0, fontSize: '0.68rem', color: '#334155', pointerEvents: 'none' }}>
+                Enter to send · Shift+Enter for new line
+              </span>
             )}
               </>
             )}

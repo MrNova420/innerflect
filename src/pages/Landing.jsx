@@ -218,7 +218,7 @@ export default function Landing() {
             transition={{ duration: 0.6, delay: 0.7 }}
             style={{ fontSize: '0.85rem', color: '#475569', marginBottom: '2.4rem' }}
           >
-            Works best on Chrome or Edge on desktop · Free to start
+            Works on Chrome or Edge · Android & Desktop · Free to start
           </motion.p>
 
           <motion.div

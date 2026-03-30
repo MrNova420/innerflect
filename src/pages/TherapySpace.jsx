@@ -5,7 +5,7 @@ import Aurora from '../components/Aurora'
 import SessionTimer from '../components/SessionTimer'
 import SessionGateModal from '../components/SessionGateModal'
 import UpgradeModal from '../components/UpgradeModal'
-import { MODELS, STORAGE_KEY, detectBestModel, shouldProgressiveLoad, markFirstVisitDone, getQuickModelId, getCompatibleModels } from '../hooks/useModelDetect'
+import { MODELS, STORAGE_KEY, detectBestModel, shouldProgressiveLoad, markFirstVisitDone, getQuickModelId, getCompatibleModels, isMobileDevice } from '../hooks/useModelDetect'
 import { useSessionLimit } from '../hooks/useSessionLimit'
 import { checkServerAIAvailable, sendServerMessage } from '../hooks/useServerAI'
 import { useAuth } from '../context/AuthContext'
@@ -146,16 +146,18 @@ function buildContextHistory(allMessages, modelId, sessionSummary) {
 }
 
 const LOADING_TIPS = [
-  "All processing happens in your browser — nothing leaves your device",
-  "Your model is cached permanently — no re-download on future visits",
-  "The AI runs entirely offline after first download",
-  "Your conversations are never stored anywhere",
-  "WebGPU enables near-native AI performance in your browser",
+  "Everything stays on your device — your conversations never leave",
+  "Once downloaded, the model loads instantly every time — no re-download",
+  "Works offline after the first load — no internet needed to chat",
+  "Your sessions are encrypted — only you can read them",
+  "The AI runs entirely on your phone's GPU — private by design",
+  "About the size of a podcast episode — cached permanently after this",
 ]
 
 function LoadingScreen({ progress, status, fromCache, modelId, detectReason, speed, eta }) {
   const model = MODELS.find(m => m.id === modelId)
   const [tipIdx, setTipIdx] = useState(0)
+  const mobile = isMobileDevice()
 
   useEffect(() => {
     const id = setInterval(() => setTipIdx(i => (i + 1) % LOADING_TIPS.length), 4000)
@@ -180,27 +182,27 @@ function LoadingScreen({ progress, status, fromCache, modelId, detectReason, spe
       overflow: 'hidden',
     }}>
       <Aurora colors={['#1e1b4b', '#7c3aed', '#0e7490']} />
-      <div style={{ position: 'relative', zIndex: 1, textAlign: 'center', padding: '2rem', maxWidth: '520px', width: '100%' }}>
+      <div style={{ position: 'relative', zIndex: 1, textAlign: 'center', padding: '1.5rem', maxWidth: '520px', width: '100%' }}>
         <motion.div
           animate={{ rotate: 360 }}
           transition={{ duration: 3, repeat: Infinity, ease: 'linear' }}
           style={{
-            width: '80px', height: '80px',
+            width: '72px', height: '72px',
             borderRadius: '50%',
             border: '3px solid rgba(124,58,237,0.2)',
             borderTop: '3px solid #7c3aed',
-            margin: '0 auto 2rem',
+            margin: '0 auto 1.75rem',
           }}
         />
-        <h2 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: '0.5rem', color: '#f1f5f9' }}>
+        <h2 style={{ fontSize: '1.4rem', fontWeight: 700, marginBottom: '0.4rem', color: '#f1f5f9' }}>
           {fromCache ? '⚡ Loading from Cache' : 'Preparing Your Space'}
         </h2>
-        <p style={{ color: '#64748b', marginBottom: '0.5rem', fontSize: '0.9rem', lineHeight: 1.6 }}>
+        <p style={{ color: '#64748b', marginBottom: '0.4rem', fontSize: '0.88rem', lineHeight: 1.6 }}>
           {status || 'Initializing...'}
         </p>
 
         {/* Step indicator */}
-        <p style={{ color: '#7c3aed', fontSize: '0.78rem', fontWeight: 600, marginBottom: '1.25rem', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+        <p style={{ color: '#7c3aed', fontSize: '0.75rem', fontWeight: 600, marginBottom: '1.1rem', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
           {stepLabel}
         </p>
 
@@ -208,13 +210,16 @@ function LoadingScreen({ progress, status, fromCache, modelId, detectReason, spe
         {model && (
           <div style={{
             display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
-            padding: '0.35rem 0.85rem', borderRadius: '100px', marginBottom: '1.5rem',
+            padding: '0.35rem 0.85rem', borderRadius: '100px', marginBottom: '1.25rem',
             background: 'rgba(124,58,237,0.15)', border: '1px solid rgba(124,58,237,0.3)',
             fontSize: '0.8rem',
           }}>
             <span style={{ color: '#a78bfa', fontWeight: 700 }}>{model.badge}</span>
             <span style={{ color: '#cbd5e1' }}>{model.label}</span>
             <span style={{ color: '#475569' }}>· {model.size}</span>
+            {mobile && model.phoneTag === '📱 Best for phones' && (
+              <span style={{ color: '#34d399', fontSize: '0.7rem' }}>· 📱 phone-ready</span>
+            )}
           </div>
         )}
 
@@ -239,15 +244,15 @@ function LoadingScreen({ progress, status, fromCache, modelId, detectReason, spe
             }}
           />
         </div>
-        <p style={{ color: '#334155', fontSize: '0.8rem', marginBottom: '0.5rem' }}>{Math.floor(progress)}%</p>
+        <p style={{ color: '#334155', fontSize: '0.8rem', marginBottom: '0.4rem' }}>{Math.floor(progress)}%</p>
 
         {/* Speed / ETA */}
         {(speed || eta) && (
-          <p style={{ color: '#475569', fontSize: '0.78rem', marginBottom: '1.25rem' }}>
+          <p style={{ color: '#475569', fontSize: '0.78rem', marginBottom: '1.1rem' }}>
             {[speed, eta ? `${eta} remaining` : null].filter(Boolean).join(' · ')}
           </p>
         )}
-        {!(speed || eta) && <div style={{ marginBottom: '1.25rem' }} />}
+        {!(speed || eta) && <div style={{ marginBottom: '1.1rem' }} />}
 
         <div style={{
           padding: '1rem',
@@ -261,7 +266,7 @@ function LoadingScreen({ progress, status, fromCache, modelId, detectReason, spe
               <>⚡ Already on your device — no download needed<br />
               <span style={{ color: '#475569' }}>Cached permanently in your browser</span></>
             ) : (
-              <>📦 First time download — {model?.size || ''}<br />
+              <>{mobile ? '📱' : '📦'} {mobile ? 'One-time download' : 'First time download'} — {model?.size || ''}<br />
               <span style={{ color: '#475569' }}>Cached permanently after this — never downloads again</span></>
             )}
           </p>
@@ -293,6 +298,7 @@ function LoadingScreen({ progress, status, fromCache, modelId, detectReason, spe
 function ModelPicker({ selectedId, onSelect, disabled }) {
   const [open, setOpen] = useState(false)
   const current = MODELS.find(m => m.id === selectedId) || MODELS[0]
+  const mobile = isMobileDevice()
   return (
     <div style={{ position: 'relative' }}>
       <button
@@ -319,31 +325,53 @@ function ModelPicker({ selectedId, onSelect, disabled }) {
             style={{
               position: 'absolute', top: 'calc(100% + 8px)', right: 0, zIndex: 100,
               background: '#12121a', border: '1px solid rgba(255,255,255,0.1)',
-              borderRadius: '12px', padding: '0.5rem', minWidth: '280px',
+              borderRadius: '12px', padding: '0.5rem', minWidth: '290px',
               boxShadow: '0 20px 60px rgba(0,0,0,0.6)',
+              maxHeight: '80vh', overflowY: 'auto',
             }}
           >
-            {MODELS.map(m => (
-              <button
-                key={m.id}
-                onClick={() => { onSelect(m.id); setOpen(false) }}
-                style={{
-                  display: 'block', width: '100%', textAlign: 'left',
-                  background: m.id === selectedId ? 'rgba(124,58,237,0.15)' : 'transparent',
-                  border: m.id === selectedId ? '1px solid rgba(124,58,237,0.3)' : '1px solid transparent',
-                  borderRadius: '8px', padding: '0.75rem', cursor: 'pointer', marginBottom: '0.25rem',
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
-                  <span style={{ color: '#f1f5f9', fontSize: '0.85rem', fontWeight: 600 }}>{m.label}</span>
-                  <span style={{ fontSize: '0.7rem', background: 'rgba(124,58,237,0.2)', color: '#a78bfa', borderRadius: '4px', padding: '1px 6px' }}>{m.badge}</span>
-                </div>
-                <div style={{ color: '#475569', fontSize: '0.75rem' }}>{m.desc}</div>
-                <div style={{ color: '#334155', fontSize: '0.72rem', marginTop: '0.2rem' }}>Size: {m.size}</div>
-              </button>
-            ))}
+            {mobile && (
+              <div style={{ padding: '0.5rem 0.5rem 0.35rem', marginBottom: '0.25rem', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                <p style={{ color: '#64748b', fontSize: '0.72rem', lineHeight: 1.5 }}>
+                  📱 On mobile? <strong style={{ color: '#94a3b8' }}>Llama 3.2 1B</strong> is auto-selected — fastest for phones. Bigger models will be slower.
+                </p>
+              </div>
+            )}
+            {MODELS.map(m => {
+              const isHeavy = mobile && m.gpuTier > 1
+              return (
+                <button
+                  key={m.id}
+                  onClick={() => { onSelect(m.id); setOpen(false) }}
+                  style={{
+                    display: 'block', width: '100%', textAlign: 'left',
+                    background: m.id === selectedId ? 'rgba(124,58,237,0.15)' : 'transparent',
+                    border: m.id === selectedId ? '1px solid rgba(124,58,237,0.3)' : '1px solid transparent',
+                    borderRadius: '8px', padding: '0.75rem', cursor: 'pointer', marginBottom: '0.25rem',
+                    opacity: isHeavy ? 0.65 : 1,
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.2rem' }}>
+                    <span style={{ color: '#f1f5f9', fontSize: '0.85rem', fontWeight: 600 }}>{m.label}</span>
+                    <span style={{ fontSize: '0.7rem', background: 'rgba(124,58,237,0.2)', color: '#a78bfa', borderRadius: '4px', padding: '1px 6px' }}>{m.badge}</span>
+                  </div>
+                  <div style={{ color: '#475569', fontSize: '0.75rem', marginBottom: '0.2rem' }}>{m.desc}</div>
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span style={{ color: '#334155', fontSize: '0.72rem' }}>Size: {m.size}</span>
+                    {m.phoneTag && (
+                      <span style={{
+                        fontSize: '0.68rem',
+                        color: m.phoneTag.startsWith('📱') ? '#34d399' : m.phoneTag.startsWith('🖥️') ? '#94a3b8' : '#f59e0b',
+                        background: 'rgba(255,255,255,0.05)',
+                        borderRadius: '4px', padding: '1px 5px',
+                      }}>{m.phoneTag}</span>
+                    )}
+                  </div>
+                </button>
+              )
+            })}
             <div style={{ borderTop: '1px solid rgba(255,255,255,0.05)', padding: '0.5rem 0.5rem 0.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ color: '#334155', fontSize: '0.72rem' }}>Model cached permanently after first download</span>
+              <span style={{ color: '#334155', fontSize: '0.72rem' }}>Cached permanently after first download</span>
               <button
                 onClick={() => { localStorage.removeItem(STORAGE_KEY); setOpen(false); window.location.reload() }}
                 style={{ background: 'none', border: 'none', color: '#475569', fontSize: '0.7rem', cursor: 'pointer', textDecoration: 'underline' }}
@@ -1193,23 +1221,46 @@ export default function TherapySpace() {
   }
 
   if (webGPUError) {
+    const mobile = isMobileDevice()
     return (
-      <div style={{ paddingTop: '64px', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem' }}>
-        <div style={{ textAlign: 'center', maxWidth: '540px' }}>
-          <div style={{ fontSize: '4rem', marginBottom: '1.5rem' }}>⚠️</div>
-          <h2 style={{ fontSize: '1.6rem', fontWeight: 700, marginBottom: '1rem', color: '#f1f5f9' }}>
-            Browser Not Supported
+      <div style={{ paddingTop: '64px', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.5rem' }}>
+        <div style={{ textAlign: 'center', maxWidth: '520px', width: '100%' }}>
+          <div style={{ fontSize: '3.5rem', marginBottom: '1.25rem' }}>📱</div>
+          <h2 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: '0.75rem', color: '#f1f5f9' }}>
+            {mobile ? 'Open in Chrome to Continue' : 'WebGPU Not Available'}
           </h2>
-          <p style={{ color: '#64748b', lineHeight: 1.7, marginBottom: '1.5rem' }}>
-            Innerflect normally runs AI entirely in your browser using WebGPU — but your browser doesn't support it yet.
+          <p style={{ color: '#64748b', lineHeight: 1.7, marginBottom: '1.5rem', fontSize: '0.92rem' }}>
+            {mobile
+              ? "Innerflect runs AI privately on your device using WebGPU — your phone supports it, but this browser doesn't have it enabled yet."
+              : "Innerflect runs AI privately in your browser using WebGPU — your current browser doesn't support it yet."}
           </p>
+
+          {/* Mobile-specific fix first */}
+          {mobile && (
+            <div style={{ background: 'rgba(124,58,237,0.1)', border: '1px solid rgba(124,58,237,0.25)', borderRadius: '16px', padding: '1.25rem', marginBottom: '1.25rem', textAlign: 'left' }}>
+              <div style={{ fontSize: '1rem', fontWeight: 700, color: '#a78bfa', marginBottom: '0.75rem' }}>📲 Fix in 30 seconds:</div>
+              <div style={{ color: '#94a3b8', fontSize: '0.88rem', lineHeight: 2 }}>
+                <div>1️⃣ Download <strong style={{ color: '#f1f5f9' }}>Google Chrome</strong> for Android/iOS (free)</div>
+                <div>2️⃣ Open this page in Chrome</div>
+                <div>3️⃣ Done — AI loads automatically</div>
+              </div>
+              <a
+                href="https://www.google.com/chrome/"
+                target="_blank"
+                rel="noreferrer"
+                style={{ display: 'inline-block', marginTop: '1rem', background: 'linear-gradient(135deg, #7c3aed, #06b6d4)', color: '#fff', borderRadius: '10px', padding: '0.7rem 1.75rem', fontWeight: 700, fontSize: '0.92rem', textDecoration: 'none' }}
+              >
+                Get Chrome (Free) →
+              </a>
+            </div>
+          )}
 
           {/* Server mode option — show if available */}
           {serverAIAvailable && (
-            <div style={{ background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.25)', borderRadius: '16px', padding: '1.5rem', marginBottom: '1.5rem', textAlign: 'left' }}>
-              <div style={{ fontSize: '1.1rem', fontWeight: 700, color: '#34d399', marginBottom: '0.5rem' }}>✨ Server Mode Available</div>
-              <p style={{ color: '#94a3b8', fontSize: '0.9rem', lineHeight: 1.6, marginBottom: '1rem' }}>
-                We can run the AI on our server instead. Your messages travel to our server to generate a response — slightly less private than in-browser mode, but works on any device.
+            <div style={{ background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.25)', borderRadius: '16px', padding: '1.25rem', marginBottom: '1.25rem', textAlign: 'left' }}>
+              <div style={{ fontSize: '1rem', fontWeight: 700, color: '#34d399', marginBottom: '0.5rem' }}>✨ Use Server Mode Instead</div>
+              <p style={{ color: '#94a3b8', fontSize: '0.88rem', lineHeight: 1.6, marginBottom: '1rem' }}>
+                The AI runs on our server — works on any browser, any device. Your messages travel to our server to generate a response (slightly less private than in-browser mode).
               </p>
               <button
                 onClick={() => {
@@ -1221,55 +1272,78 @@ export default function TherapySpace() {
                     content: "Hey — I'm here. This is a private space just for you, processed through our secure server. Whatever's going on, you can say it. What's on your mind?"
                   }])
                 }}
-                style={{ background: 'linear-gradient(135deg, #059669, #0891b2)', color: '#fff', border: 'none', borderRadius: '10px', padding: '0.75rem 1.75rem', fontWeight: 700, cursor: 'pointer', fontSize: '0.95rem' }}
+                style={{ background: 'linear-gradient(135deg, #059669, #0891b2)', color: '#fff', border: 'none', borderRadius: '10px', padding: '0.7rem 1.75rem', fontWeight: 700, cursor: 'pointer', fontSize: '0.92rem' }}
               >
                 Continue with Server Mode →
               </button>
             </div>
           )}
 
-          <div style={{ padding: '1.25rem', background: 'rgba(124,58,237,0.08)', border: '1px solid rgba(124,58,237,0.2)', borderRadius: '14px', fontSize: '0.88rem', color: '#94a3b8', lineHeight: 2, textAlign: 'left' }}>
-            <div style={{ fontWeight: 600, color: '#f1f5f9', marginBottom: '0.5rem' }}>Or switch to a supported browser:</div>
-            <div>✅ <strong style={{ color: '#f1f5f9' }}>Chrome 113+</strong> — Windows, Mac, Linux, Android</div>
+          {/* Supported browsers */}
+          <div style={{ padding: '1.1rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '14px', fontSize: '0.85rem', color: '#94a3b8', lineHeight: 2, textAlign: 'left' }}>
+            <div style={{ fontWeight: 600, color: '#f1f5f9', marginBottom: '0.4rem' }}>Works on:</div>
+            <div>✅ <strong style={{ color: '#f1f5f9' }}>Chrome 113+</strong> — Android, Windows, Mac, Linux</div>
             <div>✅ <strong style={{ color: '#f1f5f9' }}>Edge 113+</strong> — Windows, Mac</div>
-            <div>✅ <strong style={{ color: '#f1f5f9' }}>Safari 18+</strong> — macOS Sonoma / iOS 18+</div>
-            <div style={{ marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-              ⚠️ <strong style={{ color: '#f1f5f9' }}>Firefox</strong> — enable at{' '}
-              <code style={{ fontSize: '0.8rem', background: 'rgba(255,255,255,0.07)', padding: '1px 5px', borderRadius: '4px' }}>about:config</code>
-              {' '}→ <code style={{ fontSize: '0.8rem', background: 'rgba(255,255,255,0.07)', padding: '1px 5px', borderRadius: '4px' }}>dom.webgpu.enabled = true</code>
+            <div>✅ <strong style={{ color: '#f1f5f9' }}>Safari 18+</strong> — iOS 18+ / macOS Sonoma+</div>
+            <div style={{ marginTop: '0.4rem', paddingTop: '0.4rem', borderTop: '1px solid rgba(255,255,255,0.06)', color: '#64748b', fontSize: '0.8rem' }}>
+              Firefox: enable at{' '}
+              <code style={{ fontSize: '0.78rem', background: 'rgba(255,255,255,0.07)', padding: '1px 4px', borderRadius: '3px' }}>about:config</code>
+              {' → '}
+              <code style={{ fontSize: '0.78rem', background: 'rgba(255,255,255,0.07)', padding: '1px 4px', borderRadius: '3px' }}>dom.webgpu.enabled</code>
             </div>
           </div>
-          <a href="https://www.google.com/chrome/" target="_blank" rel="noreferrer"
-            style={{ display: 'inline-block', marginTop: '1.5rem', background: 'linear-gradient(135deg, #7c3aed, #06b6d4)', color: '#fff', borderRadius: '12px', padding: '0.875rem 2.5rem', fontWeight: 700, fontSize: '1rem', textDecoration: 'none' }}>
-            Download Chrome (Free)
-          </a>
+
+          {!mobile && (
+            <a href="https://www.google.com/chrome/" target="_blank" rel="noreferrer"
+              style={{ display: 'inline-block', marginTop: '1.25rem', background: 'linear-gradient(135deg, #7c3aed, #06b6d4)', color: '#fff', borderRadius: '12px', padding: '0.8rem 2.25rem', fontWeight: 700, fontSize: '0.95rem', textDecoration: 'none' }}>
+              Download Chrome (Free)
+            </a>
+          )}
         </div>
       </div>
     )
   }
 
-  // Recoverable load error — show retry button
+  // Recoverable load error — show retry + fallback options
   if (loadError) {
+    const isOOM = /memory|out of memory|oom/i.test(loadError)
+    const llamaId = 'Llama-3.2-1B-Instruct-q4f16_1-MLC'
+    const isAlreadyLight = activeModel === llamaId || activeModel === MODELS[0].id
     return (
-      <div style={{ paddingTop: '64px', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem' }}>
-        <div style={{ textAlign: 'center', maxWidth: '460px' }}>
-          <div style={{ fontSize: '3.5rem', marginBottom: '1.5rem' }}>😔</div>
-          <h2 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: '0.75rem', color: '#f1f5f9' }}>Couldn't Load Model</h2>
-          <p style={{ color: '#64748b', lineHeight: 1.7, marginBottom: '2rem' }}>{loadError}</p>
-          <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+      <div style={{ paddingTop: '64px', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.5rem' }}>
+        <div style={{ textAlign: 'center', maxWidth: '480px', width: '100%' }}>
+          <div style={{ fontSize: '3rem', marginBottom: '1.25rem' }}>😔</div>
+          <h2 style={{ fontSize: '1.4rem', fontWeight: 700, marginBottom: '0.6rem', color: '#f1f5f9' }}>Couldn't Load Model</h2>
+          <p style={{ color: '#64748b', lineHeight: 1.7, marginBottom: '0.75rem', fontSize: '0.9rem' }}>{loadError}</p>
+          {isOOM && (
+            <p style={{ color: '#f59e0b', fontSize: '0.85rem', marginBottom: '1.5rem', lineHeight: 1.6 }}>
+              💡 Your device ran out of GPU memory. Try switching to a lighter model — they work great for conversation.
+            </p>
+          )}
+          <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+            {!isAlreadyLight && (
+              <button
+                onClick={() => { setLoadError(''); initEngine(llamaId) }}
+                style={{ background: 'linear-gradient(135deg, #7c3aed, #06b6d4)', color: '#fff', border: 'none', borderRadius: '12px', padding: '0.8rem 1.75rem', fontSize: '0.95rem', fontWeight: 700, cursor: 'pointer' }}
+              >
+                📱 Try Llama 1B (~700MB)
+              </button>
+            )}
             <button
               onClick={() => { setLoadError(''); initEngine() }}
-              style={{ background: 'linear-gradient(135deg, #7c3aed, #06b6d4)', color: '#fff', border: 'none', borderRadius: '12px', padding: '0.875rem 2rem', fontSize: '1rem', fontWeight: 700, cursor: 'pointer' }}
+              style={{ background: 'rgba(255,255,255,0.06)', color: '#94a3b8', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', padding: '0.8rem 1.75rem', fontSize: '0.95rem', fontWeight: 600, cursor: 'pointer' }}
             >
               Try Again
             </button>
+          </div>
+          {isAlreadyLight && (
             <button
               onClick={() => { setLoadError(''); initEngine(MODELS[0].id) }}
-              style={{ background: 'rgba(255,255,255,0.06)', color: '#94a3b8', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', padding: '0.875rem 2rem', fontSize: '1rem', fontWeight: 600, cursor: 'pointer' }}
+              style={{ background: 'none', border: 'none', color: '#475569', fontSize: '0.82rem', cursor: 'pointer', textDecoration: 'underline' }}
             >
-              Try Smallest Model
+              Try smallest model (270MB)
             </button>
-          </div>
+          )}
         </div>
       </div>
     )

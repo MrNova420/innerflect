@@ -14,24 +14,79 @@ import { encryptMessages, decryptMessages } from '../utils/crypto'
 const API_BASE = () =>
   (typeof window !== 'undefined' && (window.API_BASE || window.INNERFLECT_API_BASE)) || ''
 
-const SYSTEM_PROMPT = `You are Innerflect — a compassionate, perceptive AI companion built for therapy, self-reflection, and personal growth. People come to you to process thoughts, untangle emotions, work through life's challenges, and sometimes just to have someone really listen.
+// ─── Therapy System Prompt ────────────────────────────────────────────────────
+// Full prompt for capable models (Llama 1B+, Gemma, Phi)
+const SYSTEM_PROMPT = `You are Innerflect — a warm, perceptive AI companion for therapy, emotional processing, and self-reflection. People come to you to untangle feelings, work through life's challenges, vent, think out loud, or just have someone genuinely listen.
 
-Your approach:
-• Listen first. Reflect back what you hear before offering anything else — this shows you understood.
-• Ask one open, Socratic question at a time. Good questions unlock insight better than advice.
-• Validate emotions unconditionally before offering reframes or new perspectives.
-• Weave evidence-based techniques naturally — CBT thought-challenging, motivational interviewing, reflective listening, grounding, self-compassion practices — without labelling them clinically.
-• Track themes, patterns, and details from earlier in this conversation. Reference them naturally to show continuity ("You mentioned earlier that...", "This sounds connected to what you shared about...").
-• Match the person's energy: if they're blabbering and venting, receive it fully before asking anything. If they want direction, offer it gently.
-• Celebrate small wins. Normalise the messy, non-linear nature of growth.
-• Encourage healthy habits around emotional processing — not just problem-solving every time.
+RESPONSE FORMAT — follow this exactly:
+- Write in natural, conversational prose. Never use bullet points, numbered lists, or headers.
+- Keep responses appropriately sized: match the depth of what the user shared. A two-sentence check-in gets a short response. A long emotional vent gets a full, present response.
+- When appropriate, end with ONE open question — not multiple. Never end with a list of questions.
+- Vary how you start responses. Don't begin every message with "I hear you" or "It sounds like." Use natural variety: start with their feeling, a gentle observation, an honest reflection, or just diving into what they said.
+- Write like you're talking, not writing an essay.
 
-Your limits:
-• Never diagnose, prescribe medication, or replace professional care. Always encourage professional help for persistent or serious concerns.
-• For any crisis signal (self-harm, suicidal ideation, abuse, danger) — immediately and warmly provide: National Crisis Hotline 988, Crisis Text Line (text HOME to 741741), and encourage professional support. Don't skip past this.
-• You are a supplement to human connection and professional care — not a replacement.
+YOUR APPROACH:
+1. Validate first, always. Name what you're hearing emotionally before anything else. "That sounds exhausting." / "Of course you're angry — that would throw anyone off."
+2. Reflect and mirror. Paraphrase what they said to show you understood — using your own words, not just repeating theirs.
+3. Explore with curiosity, not interrogation. Ask one open question: "What's been the hardest part?" / "How long have you been sitting with this?" — avoid "Why" questions (they feel accusatory).
+4. When they seem stuck, use gentle Socratic questions to help them find their own answer. Don't tell them what to think or feel.
+5. Use Motivational Interviewing when someone is ambivalent: "It sounds like part of you wants to change this, and another part isn't sure. What would it look like if things were different?"
+6. Ground them in the body when anxiety is high: "Can you take a slow breath? What do you notice in your body right now?"
+7. Normalize without dismissing: "What you're feeling makes total sense given what you've been through." — but never use "totally normal" in a hollow way.
+8. Celebrate small steps and strengths without being performatively positive. Genuine recognition hits harder than cheerleading.
+9. Reference earlier conversation naturally: "You mentioned earlier that your relationship with your dad is complicated — does this connect to that?" — continuity makes people feel truly seen.
+10. If someone is rambling or venting — just receive it fully before asking anything. Sometimes they just need a witness, not guidance.
 
-Tone: Warm, curious, grounded, and real. Like a trusted friend with a therapist's awareness — not clinical, not preachy, not performatively positive. Honest when honesty helps. Responses are conversational and appropriately sized — a long vent deserves a full, present response; a simple check-in doesn't need an essay.`
+WHEN SOMEONE IS IN PAIN:
+- Lead with warmth, not information.
+- Don't rush to fix or reframe. Sit with them in the hard feeling first.
+- Self-compassion prompts when appropriate: "What would you say to a close friend feeling exactly this way?"
+
+CRISIS PROTOCOL:
+If there is any signal of self-harm, suicidal thinking, abuse, or immediate danger — respond with warmth, take it seriously, and immediately provide:
+"If you're in crisis right now, please reach out: **988 Suicide & Crisis Lifeline** (call or text 988) or **Crisis Text Line** (text HOME to 741741). You don't have to handle this alone."
+Do not skip this or rush past it.
+
+HARD LIMITS:
+- Never diagnose, label, or suggest medications.
+- Never roleplay as a human or claim to have personal experiences.
+- Always gently encourage professional support for persistent, serious, or complex mental health concerns.
+- You supplement human connection and professional care — you never replace them.
+
+Your voice is: warm, curious, honest, grounded. Like a trusted friend who happens to have a therapist's awareness — not clinical, not preachy, not relentlessly positive. Say hard things gently when it helps. Hold space without filling every silence with advice.`
+
+// Shorter prompt for small models (SmolLM 135M/360M) that can't follow long instructions
+const SYSTEM_PROMPT_SHORT = `You are Innerflect, a warm and caring AI companion for emotional support and reflection.
+
+Listen carefully. Validate feelings before offering anything else. Ask one open question at a time. Be conversational and kind — never clinical. Write short, natural paragraphs. No bullet points or lists.
+
+If someone mentions self-harm or crisis, provide: 988 Lifeline (call/text 988) or Crisis Text Line (text HOME to 741741).
+
+Be like a caring friend who really listens. Warm, honest, present.`
+
+function getSystemPrompt(modelId) {
+  const isSmall = modelId?.includes('SmolLM2-135M') || modelId?.includes('SmolLM2-360M')
+  return isSmall ? SYSTEM_PROMPT_SHORT : SYSTEM_PROMPT
+}
+
+// Per-model inference parameters tuned for therapy conversation quality
+function getInferenceParams(modelId) {
+  const isSmall = modelId?.includes('SmolLM2-135M') || modelId?.includes('SmolLM2-360M')
+  const isMid   = modelId?.includes('Llama') || modelId?.includes('gemma')
+  if (isSmall) return { temperature: 0.7, top_p: 0.85, repetition_penalty: 1.15 }
+  if (isMid)   return { temperature: 0.82, top_p: 0.92, repetition_penalty: 1.1  }
+  /* Phi-3.5 */return { temperature: 0.88, top_p: 0.95, repetition_penalty: 1.05 }
+}
+
+// Conversation starter prompts shown when the session is fresh
+const CONVERSATION_STARTERS = [
+  { icon: '💭', text: "I've been feeling really overwhelmed lately and I don't know where to start." },
+  { icon: '😤', text: "I just need to vent about something that happened." },
+  { icon: '🤔', text: "Help me work through a decision I keep going back and forth on." },
+  { icon: '😔', text: "I've been dealing with a lot of anxiety and it's getting worse." },
+  { icon: '🌀', text: "My thoughts are all over the place — I need to untangle them." },
+  { icon: '💬', text: "I just want someone to actually listen right now." },
+]
 
 const MODEL_MAX_TOKENS = {
   'SmolLM2-135M-Instruct-q0f16-MLC': 256,
@@ -59,7 +114,8 @@ function estimateTokens(msgs) {
 
 // Build smart context history that fits within the model's context window.
 // Injects session summary as a system addendum when older messages were trimmed.
-function buildContextHistory(allMessages, systemPrompt, sessionSummary, modelId) {
+function buildContextHistory(allMessages, modelId, sessionSummary) {
+  const systemPrompt = getSystemPrompt(modelId)
   const contextWindow = MODEL_CONTEXT_WINDOW[modelId] || 4096
   const maxOut = MODEL_MAX_TOKENS[modelId] || 384
   const summaryNote = sessionSummary
@@ -372,13 +428,13 @@ function UpgradeToast({ model, onAccept, onDismiss }) {
 
 function TypingIndicator() {
   return (
-    <div style={{ display: 'flex', gap: '4px', padding: '0.75rem 1rem', alignItems: 'center' }}>
+    <div style={{ display: 'flex', gap: '5px', padding: '0.85rem 1.1rem', alignItems: 'center', background: 'rgba(255,255,255,0.04)', borderRadius: '18px 18px 18px 4px', width: 'fit-content', border: '1px solid rgba(255,255,255,0.08)' }}>
       {[0, 1, 2].map(i => (
         <motion.div
           key={i}
-          animate={{ scale: [1, 1.4, 1], opacity: [0.4, 1, 0.4] }}
-          transition={{ duration: 1.2, repeat: Infinity, delay: i * 0.2 }}
-          style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#7c3aed' }}
+          animate={{ y: [0, -5, 0], opacity: [0.35, 1, 0.35] }}
+          transition={{ duration: 1.1, repeat: Infinity, delay: i * 0.18, ease: 'easeInOut' }}
+          style={{ width: '7px', height: '7px', borderRadius: '50%', background: 'linear-gradient(135deg, #7c3aed, #06b6d4)' }}
         />
       ))}
     </div>
@@ -926,8 +982,8 @@ export default function TherapySpace() {
       setMessages([{
         role: 'assistant',
         content: isQuick
-          ? "Hello 👋 I'm here and ready to listen. A better AI model is loading in the background — I'll let you know when it's ready to give you even richer responses."
-          : "Hello 👋 I'm your private AI companion. I'm here to listen — no judgments, no records, just a safe space to talk. What's on your mind today?"
+          ? "I'm here and listening — a more capable model is loading quietly in the background. Feel free to start talking. What's been going on for you?"
+          : "Hey — I'm glad you're here. This is your space to say whatever's on your mind, without judgment. I'm not going anywhere. What's been on your mind?"
       }])
     }
   }
@@ -1041,9 +1097,8 @@ export default function TherapySpace() {
     const userMsg = { role: 'user', content: input.trim() }
     const history = buildContextHistory(
       [...messages, userMsg],
-      SYSTEM_PROMPT,
-      sessionSummary,
-      activeModel
+      activeModel,
+      sessionSummary
     )
     setMessages(prev => [...prev, userMsg, { role: 'assistant', content: '' }])
     setInput('')
@@ -1054,10 +1109,13 @@ export default function TherapySpace() {
     setCanStop(true)
     streamBufRef.current = ''
     try {
+      const inferParams = getInferenceParams(activeModel)
       const stream = await engine.chat.completions.create({
         messages: history,
         stream: true,
-        temperature: 0.8,
+        temperature: inferParams.temperature,
+        top_p: inferParams.top_p,
+        repetition_penalty: inferParams.repetition_penalty,
         max_tokens: MODEL_MAX_TOKENS[activeModel] || 384,
         signal: abortRef.current.signal,
       })
@@ -1152,7 +1210,7 @@ export default function TherapySpace() {
                   setIsReady(true)
                   setMessages([{
                     role: 'assistant',
-                    content: "Hello 👋 I'm running in Server Mode — your messages are processed on our server. I'm here to listen, no judgments. What's on your mind today?"
+                    content: "Hey — I'm here. This is a private space just for you, processed through our secure server. Whatever's going on, you can say it. What's on your mind?"
                   }])
                 }}
                 style={{ background: 'linear-gradient(135deg, #059669, #0891b2)', color: '#fff', border: 'none', borderRadius: '10px', padding: '0.75rem 1.75rem', fontWeight: 700, cursor: 'pointer', fontSize: '0.95rem' }}
@@ -1293,8 +1351,9 @@ export default function TherapySpace() {
                     border: msg.role === 'assistant' ? '1px solid rgba(255,255,255,0.08)' : 'none',
                     color: '#f1f5f9',
                     fontSize: '0.95rem',
-                    lineHeight: 1.65,
+                    lineHeight: 1.7,
                     wordBreak: 'break-word',
+                    whiteSpace: 'pre-wrap',
                   }}>
                     {msg.content || (isGenerating && i === messages.length - 1 && <TypingIndicator />)}
                   </div>
@@ -1302,6 +1361,47 @@ export default function TherapySpace() {
               ))}
             </AnimatePresence>
             {isGenerating && messages[messages.length - 1]?.content === '' && <TypingIndicator />}
+
+            {/* Conversation starters — shown only on fresh welcome screen */}
+            {messages.length === 1 && messages[0]?.role === 'assistant' && !isGenerating && (
+              <motion.div
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.4, duration: 0.5 }}
+                style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.5rem' }}
+              >
+                <p style={{ color: '#475569', fontSize: '0.78rem', textAlign: 'center', margin: '0 0 0.25rem' }}>
+                  Not sure where to start? Try one of these:
+                </p>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', justifyContent: 'center' }}>
+                  {CONVERSATION_STARTERS.map((s, i) => (
+                    <motion.button
+                      key={i}
+                      whileHover={{ scale: 1.03, background: 'rgba(124,58,237,0.18)' }}
+                      whileTap={{ scale: 0.97 }}
+                      onClick={() => { setInput(s.text); setTimeout(() => document.querySelector('textarea')?.focus(), 50) }}
+                      style={{
+                        background: 'rgba(255,255,255,0.04)',
+                        border: '1px solid rgba(255,255,255,0.1)',
+                        borderRadius: '100px',
+                        padding: '0.45rem 0.9rem',
+                        color: '#94a3b8',
+                        fontSize: '0.82rem',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.35rem',
+                        transition: 'background 0.2s',
+                        textAlign: 'left',
+                      }}
+                    >
+                      <span>{s.icon}</span> {s.text.length > 48 ? s.text.slice(0, 48) + '…' : s.text}
+                    </motion.button>
+                  ))}
+                </div>
+              </motion.div>
+            )}
+
             <div ref={messagesEndRef} />
           </div>
 

@@ -216,7 +216,20 @@ fi
 echo ""
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 6. AUTO-RENEW OPTIONS
+# 6. SECRETS HEALTH (delegates to manage-secrets.sh check)
+# ─────────────────────────────────────────────────────────────────────────────
+echo -e "${W}▸ Secrets & API Keys${NC}"
+
+if [ -f "$SITE_DIR/bin/manage-secrets.sh" ]; then
+  bash "$SITE_DIR/bin/manage-secrets.sh" check 2>/dev/null || HAS_ISSUE=1
+else
+  warn "  bin/manage-secrets.sh not found — skipping secrets check"
+  HAS_ISSUE=1
+fi
+echo ""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. AUTO-RENEW OPTIONS
 # ─────────────────────────────────────────────────────────────────────────────
 if [ "$HAS_ISSUE" -eq 1 ]; then
   echo -e "${W}▸ Auto-renew options${NC}"

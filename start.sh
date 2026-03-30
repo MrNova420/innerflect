@@ -22,6 +22,10 @@ NGROK="$(command -v ngrok 2>/dev/null \
 mkdir -p "$SITE_DIR/logs"
 cd "$SITE_DIR"
 
+# Sync GOOGLE_CLIENT_ID (and API base) from config/.env → www/config.js + public/config.js
+# so there is only ONE place to set them. Silent — errors don't block startup.
+bash "$SITE_DIR/bin/manage-secrets.sh" sync-config 2>/dev/null || true
+
 _api_up()    { curl -sf --connect-timeout 3 "http://127.0.0.1:${API_PORT}/api/health" >/dev/null 2>&1; }
 _port_used() { ss -tlnp 2>/dev/null | grep -q ":$1 " || netstat -tlnp 2>/dev/null | grep -q ":$1 "; }
 _ts_up()     { ps aux 2>/dev/null | grep -v grep | grep -q 'tailscale.*funnel'; }
